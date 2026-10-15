@@ -68,7 +68,56 @@ pub fn l1_feeder_config_for_2_23() -> ProverConfig {
     }
 }
 
+/// Bench experiment: fast-prover WHIR schedule for 100 bits. Same fold steps as the shipped
+/// table (plus a 2^19 entry), but low proof-of-work (16 bits per round) and small intermediate
+/// oracle domains (LDE x16, x64, x256, ...), with every round's query count re-derived from the
+/// rule the shipped table documents: queries = ceil(1.2 * (100 - pow) / rate_bits). The shipped
+/// table is kept below as `config_for_100_bits_under_pessimistic_conjecture_original`.
 pub fn config_for_100_bits_under_pessimistic_conjecture(trace_len_log_2: usize) -> ProverConfig {
+    const POW_BITS: usize = 16;
+    let whir_steps_schedule: Vec<usize> = match trace_len_log_2 {
+        19 => vec![1, 4, 5, 4, 4],
+        20 => vec![1, 5, 5, 4, 4],
+        21 => vec![1, 5, 5, 5, 4],
+        22 => vec![1, 5, 5, 5, 5],
+        23 => vec![1, 5, 5, 5, 4],
+        24 => vec![1, 5, 5, 5, 4, 3],
+        a => unimplemented!("not yet computed for 2^{} size", a),
+    };
+    let rounds = whir_steps_schedule.len();
+    let whir_steps_lde_factors: Vec<usize> = (0..rounds - 1).map(|i| 1usize << (4 + 2 * i)).collect();
+    let mut whir_queries_schedule = Vec::with_capacity(rounds);
+    for round in 0..rounds {
+        let rate_bits = if round == 0 {
+            DEFAULT_LDE_FACTOR.trailing_zeros() as usize
+        } else {
+            whir_steps_lde_factors[round - 1].trailing_zeros() as usize
+        };
+        whir_queries_schedule.push((12 * (100 - POW_BITS)).div_ceil(10 * rate_bits));
+    }
+    ProverConfig {
+        trace_len_log2: trace_len_log_2,
+        same_size_sumcheck_schedule: crate::gkr::prover_config::windowed_same_size_schedule(
+            trace_len_log_2,
+        ),
+        dimension_reducing_sumcheck_schedule: Default::default(),
+        lde_factor: DEFAULT_LDE_FACTOR,
+        cap_size: DEFAULT_CAP_SIZE,
+        base_oracles_values_per_leaf: 2,
+        sumcheck_explicit_output_size_log_2: DEFAULT_PLAIN_TEXT_POLY_SIZE_LOG2,
+        security_level: SecurityLevel::Sec100,
+        whir_schedule: WhirSchedule {
+            base_lde_factor: DEFAULT_LDE_FACTOR,
+            cap_size: DEFAULT_CAP_SIZE,
+            whir_steps_schedule,
+            whir_queries_schedule,
+            whir_steps_lde_factors,
+            whir_pow_schedule: vec![POW_BITS as u32; rounds],
+        },
+    }
+}
+
+pub fn config_for_100_bits_under_pessimistic_conjecture_original(trace_len_log_2: usize) -> ProverConfig {
     match trace_len_log_2 {
         20 => ProverConfig {
             trace_len_log2: trace_len_log_2,

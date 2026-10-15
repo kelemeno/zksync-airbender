@@ -14,7 +14,8 @@ pub fn jump_branch_slt_tables() -> Vec<TableType> {
     vec![
         TableType::RegIsZero,
         TableType::U16GetSign,
-        TableType::ConditionalJmpBranchSlt,
+        // bench experiment: 2^7 rs2-sign-split table instead of the 2^22 ConditionalJmpBranchSlt
+        TableType::ConditionalJmpBranchSltUnified,
         TableType::JumpCleanupOffset,
     ]
 }
@@ -413,18 +414,30 @@ fn apply_jump_branch_slt_inner<F: PrimeField, CS: Circuit<F>>(
     // and for JAL/JALR we formally set funct3 to be such that jump resolution will be always
     // false, so in computing next PC below we can avoid thinking about overlapping
     // boolean conditions
+    // bench experiment: split the second-operand sign out with U16GetSign (as the unified
+    // circuit does) so the resolution table shrinks from 2^22 to 2^7 rows.
+    let rs2_sign = cs.add_named_variable("slt/branch second-operand sign boolean");
+    cs.set_variables_from_lookup_constrained(
+        &[LookupInput::from(slt_sign_source)],
+        &[rs2_sign],
+        cs::circuit::LookupQueryTableType::Constant(TableType::U16GetSign),
+    );
     let should_jump_or_slt_value = cs.add_named_variable("jump resolution variable");
     cs.set_variables_from_lookup_constrained(
         &[LookupInput::from(
-            Expr::<F>::var(slt_sign_source)
-                + Expr::var(rs1_sign) * F::from_u32(1 << 16).unwrap()
-                + Expr::var(add_rel_0_final_of_var) * F::from_u32(1 << 17).unwrap()
-                + Expr::var(comparison_result_is_zero) * F::from_u32(1 << 18).unwrap()
+            Expr::<F>::var(rs2_sign)
+                * F::from_u32(1 << crate::tables::CONDITIONAL_RESOLUTION_RS2_SIGN_BIT_SHIFT).unwrap()
+                + Expr::var(rs1_sign)
+                    * F::from_u32(1 << crate::tables::CONDITIONAL_RESOLUTION_SRC1_SIGN_BIT_SHIFT).unwrap()
+                + Expr::var(add_rel_0_final_of_var)
+                    * F::from_u32(1 << crate::tables::CONDITIONAL_RESOLUTION_UNSIGNED_LT_BIT_SHIFT).unwrap()
+                + Expr::var(comparison_result_is_zero)
+                    * F::from_u32(1 << crate::tables::CONDITIONAL_RESOLUTION_EQ_BIT_SHIFT).unwrap()
                 + Expr::var(inputs.decoder_data.funct3.expect("must have funct3"))
-                    * F::from_u32(1 << 19).unwrap(),
+                    * F::from_u32(1 << crate::tables::CONDITIONAL_RESOLUTION_FUNCT3_BIT_SHIFT).unwrap(),
         )],
         &[should_jump_or_slt_value],
-        cs::circuit::LookupQueryTableType::Constant(TableType::ConditionalJmpBranchSlt),
+        cs::circuit::LookupQueryTableType::Constant(TableType::ConditionalJmpBranchSltUnified),
     );
     let should_jump_if_branch = cs.add_named_variable("should jump if BRANCH opcode");
 

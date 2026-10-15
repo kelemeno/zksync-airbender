@@ -1,5 +1,5 @@
 {
-  "trace_len": 16777216,
+  "trace_len": 1048576,
   "table_offsets": [
     0,
     1,
@@ -57,7 +57,7 @@
     524545,
     524545
   ],
-  "total_tables_size": 1573121,
+  "total_tables_size": 655617,
   "offset_for_decoder_table": 524545,
   "has_decoder_lookup": true,
   "layers": [

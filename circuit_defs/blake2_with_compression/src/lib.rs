@@ -20,7 +20,7 @@ impl<F: PrimeField> circuit_common::DelegationCircuit<F>
     const DELEGATION_TYPE_ID: u16 =
         common_constants::delegation_types::blake2s_with_control::BLAKE2S_DELEGATION_CSR_REGISTER
             as u16;
-    const DOMAIN_SIZE_LOG2: u32 = 20;
+    const DOMAIN_SIZE_LOG2: u32 = 19;
 
     fn circuit_fn<CS: cs::cs::circuit_trait::Circuit<F>>(cs: &mut CS) {
         define_blake2_with_extended_control_delegation_circuit(cs);

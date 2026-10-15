@@ -349,7 +349,10 @@ pub fn prove_unrolled_execution_with_replayer<
 ) -> (
     full_statement_verifier::program_proof::ProgramProof,
     BTreeMap<u32, UnrolledCircuitSetupParams>,
-) {
+)
+where
+    B::TwiddleSet: 'static,
+{
     let mut program_proof = full_statement_verifier::program_proof::ProgramProof {
         riscv_proofs: BTreeMap::new(),
         compiled_riscv_circuits: BTreeMap::new(),
@@ -607,11 +610,17 @@ pub fn prove_unrolled_execution_with_replayer<
         println!("{} circuits of family {}", v.len(), k);
     }
 
-    let setups = setups::get_unrolled_circuits_setups_for_machine_type::<C, Global>(
-        binary_image,
-        text_section,
-        use_caches,
-        worker,
+    let warm_bin = crate::warm::hash_words(&[binary_image, text_section]);
+    let setups = crate::warm::memo(
+        format!("setups-{}-{}-{}", warm_bin, std::any::type_name::<C>(), use_caches),
+        || {
+            setups::get_unrolled_circuits_setups_for_machine_type::<C, Global>(
+                binary_image,
+                text_section,
+                use_caches,
+                worker,
+            )
+        },
     );
     for (k, v) in setups.iter() {
         program_proof
@@ -619,14 +628,16 @@ pub fn prove_unrolled_execution_with_replayer<
             .insert(*k as u32, v.compiled_circuit.clone());
     }
     let inits_and_teardowns_setup =
-        setups::inits_and_teardowns_circuit_setup::<Global>(use_caches, worker);
+        crate::warm::memo(format!("inits-{}", use_caches), || {
+            setups::inits_and_teardowns_circuit_setup::<Global>(use_caches, worker)
+        });
     program_proof.inits_and_teardowns_circuit =
         Some(inits_and_teardowns_setup.compiled_circuit.clone());
     let blake_round_function_setup =
-        setups::get_blake2_with_compression_circuit_setup(use_caches, worker);
-    let bigint_setup = setups::get_bigint_with_control_circuit_setup(use_caches, worker);
-    let keccak_special5_setup = setups::get_keccak_special5_circuit_setup(use_caches, worker);
-    let blake_g_function_setup = setups::get_blake2_g_function_circuit_setup(use_caches, worker);
+        crate::warm::memo(format!("blake_round_function_setup-{}", use_caches), || setups::get_blake2_with_compression_circuit_setup(use_caches, worker));
+    let bigint_setup = crate::warm::memo(format!("bigint_setup-{}", use_caches), || setups::get_bigint_with_control_circuit_setup(use_caches, worker));
+    let keccak_special5_setup = crate::warm::memo(format!("keccak_special5_setup-{}", use_caches), || setups::get_keccak_special5_circuit_setup(use_caches, worker));
+    let blake_g_function_setup = crate::warm::memo(format!("blake_g_function_setup-{}", use_caches), || setups::get_blake2_g_function_circuit_setup(use_caches, worker));
 
     for el in [
         &blake_round_function_setup,
@@ -664,7 +675,10 @@ pub fn prove_unrolled_execution_with_replayer<
     program_proof.final_pc = final_pc;
     program_proof.final_timestamp = final_timestamp;
 
-    let mut twiddles = HashMap::new();
+    let twiddles_cell = crate::warm::memo(format!("twiddles-{}", std::any::type_name::<B>()), || {
+        std::cell::RefCell::new(HashMap::<usize, B::TwiddleSet>::new())
+    });
+    let mut twiddles = twiddles_cell.borrow_mut();
 
     // commit memory trees
     for (family_idx, witness_chunks) in non_mem_circuits.iter() {
@@ -967,11 +981,27 @@ pub fn prove_unrolled_execution_with_replayer<
     #[cfg(feature = "debug_logs")]
     println!("Will create FS transformation challenge for memory and delegation arguments");
 
+    // bench fix: commit delegation trees in the verifier's (FSV) fixed delegation order
+    // (blake2 round fn, bigint, keccak, blake2 G fn = DELEGATION_CIRCUITS_SETUP_PARAMS), which is
+    // also the order the proofs below are produced in. The type-sorted order used before only
+    // matched the FSV when the used delegation types happen to sort the same way.
+    let delegation_order: [u32; 4] = [
+        <setups::Blake2sWithCompressionDelegationCircuit as DelegationCircuit<BabyBearField>>::DELEGATION_TYPE_ID as u32,
+        <setups::BigIntDelegationCircuit as DelegationCircuit<BabyBearField>>::DELEGATION_TYPE_ID as u32,
+        <setups::KeccakSpecial5DelegationCircuit as DelegationCircuit<BabyBearField>>::DELEGATION_TYPE_ID as u32,
+        <setups::Blake2sGFunctionDelegationCircuit as DelegationCircuit<BabyBearField>>::DELEGATION_TYPE_ID as u32,
+    ];
     let delegation_memory_trees_vec: Vec<(u32, Vec<prover::merkle_trees::MerkleTreeCapVarLength>)> =
-        delegation_memory_trees
+        delegation_order
             .iter()
-            .map(|(k, v)| (*k as u32, v.clone()))
+            .filter_map(|t| {
+                delegation_memory_trees
+                    .iter()
+                    .find(|(k, _)| **k as u32 == *t)
+                    .map(|(_, v)| (*t, v.clone()))
+            })
             .collect();
+    assert_eq!(delegation_memory_trees_vec.len(), delegation_memory_trees.len());
 
     // commit memory challenges
     let all_challenges_seed = fs_transform_unrolled_for_permutation_argument::<true>(
@@ -1091,14 +1121,14 @@ pub fn prove_unrolled_execution_with_replayer<
                 let twiddles_for_size = twiddles
                     .entry(trace_len)
                     .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-                let setup_commitment = setup.setup.commit::<DefaultTreeConstructor>(
+                let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit::<DefaultTreeConstructor>(
                     twiddles_for_size.plain(),
                     prover_config.lde_factor,
                     prover_config.whir_schedule.whir_steps_schedule[0],
                     prover_config.cap_size,
                     trace_len.trailing_zeros() as usize,
                     &worker,
-                );
+                ));
 
                 risc_v_setup_params.insert(
                     family_idx as u32,
@@ -1122,14 +1152,14 @@ pub fn prove_unrolled_execution_with_replayer<
         let twiddles_for_size = twiddles
             .entry(trace_len)
             .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-        let setup_commitment = setup.setup.commit::<DefaultTreeConstructor>(
+        let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit::<DefaultTreeConstructor>(
             twiddles_for_size.plain(),
             prover_config.lde_factor,
             prover_config.whir_schedule.whir_steps_schedule[0],
             prover_config.cap_size,
             trace_len.trailing_zeros() as usize,
             &worker,
-        );
+        ));
 
         risc_v_setup_params.insert(
             family_idx as u32,
@@ -1264,14 +1294,14 @@ pub fn prove_unrolled_execution_with_replayer<
                 let twiddles_for_size = twiddles
                     .entry(trace_len)
                     .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-                let setup_commitment = setup.setup.commit::<DefaultTreeConstructor>(
+                let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit::<DefaultTreeConstructor>(
                     twiddles_for_size.plain(),
                     prover_config.lde_factor,
                     prover_config.whir_schedule.whir_steps_schedule[0],
                     prover_config.cap_size,
                     trace_len.trailing_zeros() as usize,
                     &worker,
-                );
+                ));
 
                 risc_v_setup_params.insert(
                     family_idx as u32,
@@ -1294,14 +1324,14 @@ pub fn prove_unrolled_execution_with_replayer<
         let twiddles_for_size = twiddles
             .entry(trace_len)
             .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-        let setup_commitment = setup.setup.commit::<DefaultTreeConstructor>(
+        let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit::<DefaultTreeConstructor>(
             twiddles_for_size.plain(),
             prover_config.lde_factor,
             prover_config.whir_schedule.whir_steps_schedule[0],
             prover_config.cap_size,
             trace_len.trailing_zeros() as usize,
             &worker,
-        );
+        ));
 
         risc_v_setup_params.insert(
             family_idx as u32,
@@ -1433,14 +1463,14 @@ pub fn prove_unrolled_execution_with_replayer<
         let twiddles_for_size = twiddles
             .entry(trace_len)
             .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-        let setup_commitment = setup.setup.commit(
+        let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit(
             twiddles_for_size.plain(),
             prover_config.lde_factor,
             prover_config.whir_schedule.whir_steps_schedule[0],
             prover_config.cap_size,
             trace_len.trailing_zeros() as usize,
             &worker,
-        );
+        ));
 
         use prover::gkr::witness_gen::family_circuits::evaluate_init_and_teardown_memory_witness;
         use prover::gkr::witness_gen::family_circuits::GKRFullWitnessTrace;
@@ -1743,14 +1773,14 @@ pub(crate) fn prove_delegation_circuit<
     let twiddles_for_size = twiddles
         .entry(trace_len)
         .or_insert_with(|| backend.make_twiddles(trace_len, worker));
-    let setup_commitment = setup.setup.commit(
+    let setup_commitment = crate::warm::memo(format!("setupcommit-{:p}-{}", &setup.setup, trace_len), || setup.setup.commit(
         twiddles_for_size.plain(),
         prover_config.lde_factor,
         prover_config.whir_schedule.whir_steps_schedule[0],
         prover_config.cap_size,
         trace_len.trailing_zeros() as usize,
         &worker,
-    );
+    ));
 
     let mut per_tree_set = vec![];
 

@@ -591,7 +591,8 @@ pub fn fs_transform_unrolled_for_permutation_argument<const REDUCED_ROUNDS: bool
     // we will always commit a tuple of delegation type + caps. This way the order is not too important, but we adhere to convention that
     // those should be batched and sorted
 
-    assert!(delegation_circuits_memory_caps.is_sorted_by(|a, b| a.0 < b.0));
+    // bench fix: delegations come in the FSV DELEGATION_CIRCUITS_SETUP_PARAMS order (not type-sorted); require no duplicates.
+    assert!(delegation_circuits_memory_caps.iter().enumerate().all(|(i, a)| delegation_circuits_memory_caps[..i].iter().all(|b| b.0 != a.0)));
     for (delegation_type, caps) in delegation_circuits_memory_caps.iter() {
         if caps.len() > 0 {
             let mut buffer = [0u32; BLAKE2S_BLOCK_SIZE_U32_WORDS];
@@ -668,7 +669,8 @@ pub fn fs_transform_unified_for_permutation_argument<const REDUCED_ROUNDS: bool>
     // we will always commit a tuple of delegation type + caps. This way the order is not too important, but we adhere to convention that
     // those should be batched and sorted
 
-    assert!(delegation_circuits_memory_caps.is_sorted_by(|a, b| a.0 < b.0));
+    // bench fix: delegations come in the FSV DELEGATION_CIRCUITS_SETUP_PARAMS order (not type-sorted); require no duplicates.
+    assert!(delegation_circuits_memory_caps.iter().enumerate().all(|(i, a)| delegation_circuits_memory_caps[..i].iter().all(|b| b.0 != a.0)));
     for (delegation_type, caps) in delegation_circuits_memory_caps.iter() {
         if caps.len() > 0 {
             let mut buffer = [0u32; BLAKE2S_BLOCK_SIZE_U32_WORDS];

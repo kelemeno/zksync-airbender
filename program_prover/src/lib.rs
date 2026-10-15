@@ -12,6 +12,7 @@ pub mod l1;
 pub mod unified;
 pub mod unified_transition;
 pub mod unrolled;
+pub mod warm;
 
 const DUMP_WITNESS_VAR: &str = "DUMP_WITNESS";
 

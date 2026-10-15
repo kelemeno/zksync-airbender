@@ -67,7 +67,7 @@ pub(crate) fn evaluate_single_column_lookup_relation<
                             row,
                             relation
                         );
-                        assert_eq!(value as u16, mapping_index);
+                        assert_eq!(value as u16, mapping_index, "16-bit lookup index mismatch at row {} (trace len {}) for relation {:?}", row, source_ref.len(), relation);
                     }
 
                     #[cfg_attr(not(feature = "gkr_test_forge"), allow(unused_mut))]

@@ -1285,12 +1285,14 @@ fn load_and_validate_program(
 }
 
 pub fn serialize_to_file<T: serde::Serialize>(el: &T, filename: &Path) {
-    let mut dst = std::fs::File::create(filename).unwrap();
+    use std::io::Write;
+    let mut dst = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(filename).unwrap());
     serde_json::to_writer_pretty(&mut dst, el).unwrap();
+    dst.flush().unwrap();
 }
 
 pub fn deserialize_from_file<T: serde::de::DeserializeOwned>(filename: &str) -> T {
-    let src = std::fs::File::open(filename).expect(filename);
+    let src = std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(filename).expect(filename));
     serde_json::from_reader(src).unwrap()
 }
 

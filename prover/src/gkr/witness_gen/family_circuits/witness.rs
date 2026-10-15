@@ -669,9 +669,12 @@ pub(crate) unsafe fn gkr_count_special_multiplicities<'a, F: PrimeField, O: Orac
             absolute_row_idx
         );
         let index = value.as_u32_reduced() as usize;
-        debug_assert!(idx < range_check_16_chunk.len());
+        // The GKR prover reads this mapping by `lookup_set_index`, and the compiler does not
+        // always emit range_check_16_lookup_expressions in index order.
+        let slot = range_check_expression.lookup_set_index;
+        debug_assert!(slot < range_check_16_chunk.len());
         range_check_16_chunk
-            .get_unchecked_mut(idx)
+            .get_unchecked_mut(slot)
             .write(index as u16);
         *range_check_16_multiplicieties.get_unchecked_mut(index) += 1;
     }
